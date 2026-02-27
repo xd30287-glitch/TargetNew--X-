@@ -2,11 +2,11 @@ import discord
 from discord import ui, app_commands
 import os
 import asyncio
-import aiohttp
 from flask import Flask
 from threading import Thread
+from datetime import datetime
 
-# Render'da 7/24 açık kalması için gereken ufak sunucu
+# --- RENDER WEB SUNUCU ---
 app = Flask('')
 @app.route('/')
 def home(): return "Bot Aktif!"
@@ -16,29 +16,34 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- AYARLAR (Render Environment'dan çekilir) ---
+# --- AYARLAR ---
 TOKEN = os.getenv("BOT_TOKEN") 
-ALLOWED_CHANNEL_ID = 1476943347594563656 # Mesajın atılacağı kanal
+ALLOWED_CHANNEL_ID = 1476943347594563656 
 
 active_tasks = {}
 
-# --- MODAL (FORM) ---
 class TargetModal(ui.Modal, title='AuraNest Takip Sistemi'):
     target_id = ui.TextInput(label='Takip Edilecek Kullanıcı ID', placeholder='ID girin...')
     bekleme = ui.TextInput(label='Bekleme Süresi (Dakika)', placeholder='Örn: 5', default='5')
-    webhook = ui.TextInput(label='Webhook URL', placeholder='https://discord.com/...')
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = self.target_id.value.strip()
+        try:
+            minutes = int(self.bekleme.value)
+        except:
+            return await interaction.response.send_message("Lütfen sayı girin!", ephemeral=True)
+        
+        # Sistemi çalıştıran kişinin ID'sini (interaction.user.id) kaydediyoruz
         active_tasks[uid] = {
             "vakit": discord.utils.utcnow(),
-            "webhook": self.webhook.value,
-            "süre": int(self.bekleme.value),
+            "owner_id": interaction.user.id, 
+            "süre": minutes,
+            "icerik": "Henüz mesaj yok",
+            "link": "",
             "bildirildi": False
         }
-        await interaction.response.send_message(f"✅ `{uid}` için takip başladı!", ephemeral=True)
+        await interaction.response.send_message(f"✅ `{uid}` için takip başladı! Sustuğunda sana DM atacağım.", ephemeral=True)
 
-# --- BUTON ---
 class PersistentView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -57,13 +62,15 @@ class MyBot(discord.Client):
         await self.tree.sync()
 
     async def on_ready(self):
-        print(f"{self.user} hazır!")
+        print(f"Giriş Başarılı: {self.user}")
         self.loop.create_task(self.takip_dongusu())
 
     async def on_message(self, message):
         uid = str(message.author.id)
         if uid in active_tasks:
             active_tasks[uid]["vakit"] = discord.utils.utcnow()
+            active_tasks[uid]["icerik"] = message.content or "(Görsel/Dosya)"
+            active_tasks[uid]["link"] = message.jump_url
             active_tasks[uid]["bildirildi"] = False
 
     async def takip_dongusu(self):
@@ -73,20 +80,28 @@ class MyBot(discord.Client):
             for uid, data in list(active_tasks.items()):
                 diff = (now - data["vakit"]).total_seconds()
                 if diff >= (data["süre"] * 60) and not data["bildirildi"]:
-                    msg = f"**KULLANICI SUSMUŞTUR XD**\n**ID:** `{uid}`\n**Süre:** {data['süre']} dk."
-                    async with aiohttp.ClientSession() as session:
-                        await session.post(data["webhook"], json={"content": msg})
-                    data["bildirildi"] = True
+                    # DM Gönderme İşlemi
+                    try:
+                        user = await self.fetch_user(data["owner_id"])
+                        msg = (
+                            f"**KULLANICI SUSMUŞTUR XD**\n"
+                            f"**Kullanıcı ID:** `{uid}`\n"
+                            f"**Süre:** {data['süre']} dakikadır mesaj yok.\n"
+                            f"**Son Mesaj:** {data['icerik']}\n"
+                            f"**Git:** [Mesaja Git]({data['link']})"
+                        )
+                        await user.send(msg)
+                        data["bildirildi"] = True
+                    except Exception as e:
+                        print(f"DM Gönderilemedi: {e}")
             await asyncio.sleep(20)
 
 bot = MyBot()
 
 @bot.tree.command(name="kurulum", description="Giriş panelini kurar")
 async def kurulum(interaction: discord.Interaction):
-    embed = discord.Embed(title="⚡ Nasıl Çalışır?", color=0x2ecc71, description="* **Formu doldurun** ve tokenlerinizi girin\n* Sistem otomatik işlemleri başlatır")
-    embed.add_field(name="💠 Neler Gerekiyor?", value="* Botu Sunucuya Ekle!\n* Sunucu ID ve **Tokenler** bilgisi", inline=False)
-    embed.add_field(name="🛡️ Güvenlik", value=">> Veriler **güvenli işlenir**\n>> Paylaşılmaz", inline=False)
-    embed.set_image(url="https://i.imgur.com/your_banner_link.png") # Kendi görsel linkini koyabilirsin
+    embed = discord.Embed(title="⚡ AuraNest Takip Sistemi", color=0x2ecc71)
+    embed.add_field(name="🚀 Nasıl Çalışır?", value="Butona bas, ID gir, sustuğunda bot sana DM atsın!", inline=False)
     await interaction.channel.send(embed=embed, view=PersistentView())
     await interaction.response.send_message("Panel kuruldu!", ephemeral=True)
 
