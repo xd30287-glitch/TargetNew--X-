@@ -7,7 +7,7 @@ import os
 from flask import Flask
 from threading import Thread
 
-# --- WEB SUNUCU (RENDER İÇİN) ---
+# --- RENDER İÇİN WEB SUNUCU ---
 app = Flask('')
 
 @app.route('/')
@@ -34,6 +34,14 @@ class MyBot(commands.Bot):
     async def setup_hook(self):
         await self.tree.sync()
         print(f"Slash komutları senkronize edildi: {self.user}")
+
+    # RAHATSIZ ETMEYİN MODU
+    async def on_ready(self):
+        await self.change_presence(
+            status=discord.Status.dnd, 
+            activity=discord.Game(name="Red Sky Takip")
+        )
+        print(f'{self.user} Rahatsız Etmeyin modunda ve hazır!')
 
 bot = MyBot()
 active_tasks = {}
@@ -89,6 +97,7 @@ class PersistentView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
+    # BUTON ADI 'TIKLA' OLARAK GÜNCELLENDİ
     @ui.button(label='TIKLA', style=discord.ButtonStyle.danger, custom_id='setup_btn')
     async def setup_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_modal(TargetModal())
@@ -96,7 +105,7 @@ class PersistentView(ui.View):
 # --- KOMUTLAR ---
 @bot.tree.command(name="kurulum", description="Giriş panelini kurar")
 async def kurulum(interaction: discord.Interaction):
-    # İSTEDİĞİN PANEL TASARIMI
+    # RED SKY TAKİP SİSTEMİ TASARIMI
     embed = discord.Embed(title=":55607redarrowright: Red Sky Takip Sistemi", color=0xff0000)
     embed.add_field(
         name=":55607redarrowright: Nasıl Çalışır?", 
@@ -105,7 +114,7 @@ async def kurulum(interaction: discord.Interaction):
     )
     
     await interaction.channel.send(embed=embed, view=PersistentView())
-    await interaction.response.send_message("Panel kuruldu.", ephemeral=True)
+    await interaction.response.send_message("Panel başarıyla kuruldu.", ephemeral=True)
 
 # --- ANA ÇALIŞTIRMA ---
 if __name__ == "__main__":
