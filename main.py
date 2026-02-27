@@ -1,22 +1,15 @@
 import discord
 from discord import app_commands, ui
 from discord.ext import commands
-import datetime
-import asyncio
 import os
 from flask import Flask
 from threading import Thread
 
-# --- RENDER İÇİN WEB SUNUCU ---
+# --- WEB SUNUCU ---
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "Bot Aktif!"
-
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
+def home(): return "Bot Aktif!"
+def run(): app.run(host='0.0.0.0', port=8080)
 def keep_alive():
     t = Thread(target=run)
     t.start()
@@ -24,66 +17,95 @@ def keep_alive():
 # --- BOT AYARLARI ---
 TOKEN = os.getenv("BOT_TOKEN")
 intents = discord.Intents.default()
-intents.message_content = True  #
-intents.members = True          #
+intents.message_content = True 
+intents.members = True          
 
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
-
     async def setup_hook(self):
         await self.tree.sync()
-        print(f"Slash komutları senkronize edildi: {self.user}")
-
     async def on_ready(self):
-        # RAHATSIZ ETMEYİN MODU
-        await self.change_presence(
-            status=discord.Status.dnd, 
-            activity=discord.Game(name="Red Sky Takip")
-        )
+        await self.change_presence(status=discord.Status.dnd, activity=discord.Game(name="Red Sky Takip"))
         print(f'{self.user} hazır!')
 
 bot = MyBot()
-active_tasks = {}
 
-# --- MODAL (FORM) ---
-class TargetModal(ui.Modal, title='Red Sky Takip Sistemi'):
+# --- VERİ DEPOLAMA (Çoklu Takip İçin) ---
+# Format: { user_id: { "token": "...", "targets": { "target_id": "dakika", ... } } }
+user_data = {}
+
+# --- 2. AŞAMA: HEDEF EKLEME FORMU ---
+class AddTargetModal(ui.Modal, title='Hedef Kullanıcı Ekle'):
     target_id = ui.TextInput(label='Takip Edilecek Kullanıcı ID', placeholder='ID girin...', required=True)
-    user_token = ui.TextInput(label='Hesap Tokenini Gir (Self-Token)', placeholder='Token yapıştır...', required=True)
     bekleme = ui.TextInput(label='Bekleme Süresi (Dakika)', placeholder='Örn: 5', default='5', required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        uid = self.target_id.value.strip()
-        # Mesajı istediğin formata göre güncelledik
-        success_msg = (
-            f"**#TAKİP İŞLEMİ BAŞARI**\n"
-            f"**HEDEF KULLANICI İD:** `{uid}`\n"
-            f"**DURUM:** Kullanıcı sustuğunda sana DM üzerinden mesaj gönderilecek!"
-        )
-        await interaction.response.send_message(success_msg, ephemeral=True)
+        user_id = interaction.user.id
+        tid = self.target_id.value.strip()
+        
+        # Kullanıcın listesine hedefi ekle
+        user_data[user_id]["targets"][tid] = self.bekleme.value
+        
+        msg = f"**#BAŞARILI**\n`{tid}` ID'li kullanıcı {self.bekleme.value} dakika sustuğunda bildirim alacaksın."
+        await interaction.response.send_message(msg, ephemeral=True)
 
-# --- PANEL GÖRÜNÜMÜ ---
-class PersistentView(ui.View):
+# --- 1. AŞAMA: TOKEN GİRİŞ FORMU ---
+class TokenModal(ui.Modal, title='Red Sky: Token Girişi'):
+    user_token = ui.TextInput(label='Hesap Tokenini Gir (Self-Token)', placeholder='Token yapıştır...', style=discord.TextStyle.short, required=True)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        # Kullanıcı verisini oluştur veya güncelle
+        if user_id not in user_data:
+            user_data[user_id] = {"token": self.user_token.value.strip(), "targets": {}}
+        else:
+            user_data[user_id]["token"] = self.user_token.value.strip()
+            
+        # Token alındı, şimdi hedef ekleme butonlarının olduğu bir mesaj gönder
+        view = ControlView()
+        await interaction.response.send_message("✅ Token kaydedildi. Aşağıdaki butondan hedef ekleyebilir veya listenizi yönetebilirsiniz.", view=view, ephemeral=True)
+
+# --- KONTROL PANELİ (DÜZENLEME VE EKLEME) ---
+class ControlView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @ui.button(label='TIKLA', style=discord.ButtonStyle.danger, custom_id='setup_btn')
-    async def setup_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_modal(TargetModal())
+    @ui.button(label='➕ Hedef Ekle', style=discord.ButtonStyle.success)
+    async def add_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(AddTargetModal())
 
-# --- KOMUTLAR ---
+    @ui.button(label='📋 Takip Listem', style=discord.ButtonStyle.secondary)
+    async def list_btn(self, interaction: discord.Interaction, button: ui.Button):
+        user_id = interaction.user.id
+        targets = user_data.get(user_id, {}).get("targets", {})
+        
+        if not targets:
+            return await interaction.response.send_message("Henüz kimseyi takip etmiyorsun.", ephemeral=True)
+        
+        list_msg = "**Takip Listen:**\n"
+        for tid, min in targets.items():
+            list_msg += f"• ID: `{tid}` | Süre: {min} dk\n"
+        
+        await interaction.response.send_message(list_msg, ephemeral=True)
+
+# --- ANA PANEL ---
+class MainView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label='TIKLA', style=discord.ButtonStyle.danger, custom_id='main_setup_btn')
+    async def setup_btn(self, interaction: discord.Interaction, button: ui.Button):
+        # Önce Token isteyen modalı aç
+        await interaction.response.send_modal(TokenModal())
+
 @bot.tree.command(name="kurulum", description="Giriş panelini kurar")
 async def kurulum(interaction: discord.Interaction):
-    # Çift mesaj sorununu çözmek için sadece tek bir embed gönderiyoruz
     embed = discord.Embed(title="🔻 Red Sky Takip Sistemi", color=0xff0000)
-    embed.add_field(
-        name="🔻 Nasıl Çalışır?", 
-        value="Butona bas, ID gir, sustuğunda bot sana DM atsın!", 
-        inline=False
-    )
-    # response.send_message kullanarak tek ve temiz bir panel oluşturuyoruz
-    await interaction.response.send_message(embed=embed, view=PersistentView())
+    embed.add_field(name="🔻 Nasıl Çalışır?", value="1. TIKLA butonuna basıp tokenini gir.\n2. Ardından hedef kullanıcılarını ekle.", inline=False)
+    # Sadece tek bir ana panel mesajı
+    await interaction.response.send_message(embed=embed, view=MainView())
 
 if __name__ == "__main__":
-    keep_alive() #
+    keep_alive() 
     bot.run(TOKEN)
